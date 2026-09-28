@@ -1,6 +1,6 @@
+# SeismoInsight analytics module
 import numpy as np
 import pandas as pd
-
 
 def kpis(df):
     if df.empty:
