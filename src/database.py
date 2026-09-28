@@ -89,7 +89,8 @@ def upsert_dataframe(engine, df):
         clean[col] = pd.to_datetime(clean[col], errors="coerce").dt.tz_localize(None)
 
     clean = clean.where(pd.notna(clean), None)
-    records = clean.to_dict(orient="records")
+
+    records = clean.astype(object).where(pd.notna(clean), None).to_dict(orient="records")
 
     with engine.begin() as conn:
         for i in range(0, len(records), 1000):

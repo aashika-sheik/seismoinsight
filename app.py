@@ -9,7 +9,9 @@ from src.analytics import (
     kpis, yearly_counts, magnitude_distribution, depth_distribution,
     top_countries, strongest, top_deep, regional_summary, yoy_growth,
     hour_counts, network_counts, quality_extremes, activity_zones,
-    seismic_story
+    seismic_story, top_average_magnitude_countries, same_month_shallow_deep,
+    equator_depth, shallow_deep_ratio, tsunami_magnitude_difference,
+    high_station_coverage, active_regions
 )
 
 st.set_page_config(page_title="SeismoInsight", page_icon="🌍", layout="wide")
@@ -121,7 +123,7 @@ with st.sidebar:
     st.divider()
     page = st.radio("Navigate", [
         "Dashboard","Global Map","Trends & Analysis","Seismic Activity Zones",
-        "Earthquake Explorer","Regional Comparison","Data Quality","Reports"
+        "Earthquake Explorer","Regional Comparison","SQL Analysis","Data Quality","Reports"
     ])
     st.divider()
     if st.button("↻ Refresh Data", use_container_width=True):
@@ -302,6 +304,81 @@ elif page == "Regional Comparison":
         with b:
             st.plotly_chart(style_fig(px.bar(reg,x="country",y="avg_magnitude",title="Average Magnitude")),use_container_width=True)
         st.plotly_chart(style_fig(px.bar(reg,x="country",y="avg_depth_km",title="Average Depth (km)")),use_container_width=True)
+
+elif page == "SQL Analysis":
+    st.markdown("## 🧮 SQL Analysis Results")
+    st.caption("These tables mirror the analytical tasks in sql/analysis_queries.sql. The source table is the MySQL earthquakes table.")
+
+    st.markdown("### Tasks 1–3 · Magnitude & Depth")
+    a, b = st.columns(2)
+    with a:
+        st.markdown("**Top 10 strongest earthquakes**")
+        st.dataframe(strongest(filtered, 10), use_container_width=True, hide_index=True)
+    with b:
+        st.markdown("**Top 10 deepest earthquakes**")
+        st.dataframe(top_deep(filtered, 10), use_container_width=True, hide_index=True)
+
+    st.markdown("**Shallow (<50 km) and magnitude > 7.5**")
+    st.dataframe(
+        filtered[(filtered["depth_km"] < 50) & (filtered["mag"] > 7.5)]
+        [["id","time","place","mag","depth_km"]]
+        .sort_values("mag", ascending=False),
+        use_container_width=True, hide_index=True
+    )
+
+    st.markdown("### Tasks 6–10 · Time & Reporting Network")
+    a, b = st.columns(2)
+    with a:
+        y = yearly_counts(filtered)
+        st.dataframe(y.sort_values("events", ascending=False), use_container_width=True, hide_index=True)
+    with b:
+        st.dataframe(network_counts(filtered, 10), use_container_width=True, hide_index=True)
+
+    st.markdown("### Tasks 21–24 · Regional Patterns")
+    st.markdown("**Top 5 countries by average magnitude (minimum 10 events)**")
+    st.dataframe(top_average_magnitude_countries(filtered, 5), use_container_width=True, hide_index=True)
+    st.markdown("**Three most active regions — frequency 65% + average magnitude 35%**")
+    st.dataframe(active_regions(filtered, 3), use_container_width=True, hide_index=True)
+
+    st.markdown("### Tasks 22, 25–28 · Depth, Equator, Tsunami & Quality")
+    tabs = st.tabs(["Same-month shallow + deep", "Equator ±5°", "Shallow/deep ratio", "Tsunami difference", "Lowest reliability"])
+    with tabs[0]:
+        st.dataframe(same_month_shallow_deep(filtered), use_container_width=True, hide_index=True)
+    with tabs[1]:
+        st.dataframe(equator_depth(filtered), use_container_width=True, hide_index=True)
+    with tabs[2]:
+        st.dataframe(shallow_deep_ratio(filtered).head(30), use_container_width=True, hide_index=True)
+    with tabs[3]:
+        st.dataframe(tsunami_magnitude_difference(filtered), use_container_width=True, hide_index=True)
+    with tabs[4]:
+        st.dataframe(quality_extremes(filtered, 20), use_container_width=True, hide_index=True)
+
+    st.markdown("### Tasks 11–13 & 20 · External fields")
+    st.info(
+        "Casualties, economic loss and alert level are not part of the supplied 26-feature dataset. "
+        "These tasks are documented as unavailable rather than being filled with fabricated values."
+    )
+
+    st.markdown("### Task 29 · Consecutive-event distance analysis")
+    st.info("The full Haversine/1-hour query is available in sql/analysis_queries.sql and runs directly in MySQL 8.0.")
+    st.code(
+        "LEAD(time), LEAD(latitude), LEAD(longitude) + Haversine distance <= 50 km + time gap <= 3600 seconds",
+        language="text"
+    )
+
+    st.markdown("### Task 30 · Deep-focus regions")
+    deep = (
+        filtered[filtered["depth_km"] > 300]
+        .groupby("country")
+        .agg(deep_focus_events=("id","count"),
+             avg_magnitude=("mag","mean"),
+             avg_depth_km=("depth_km","mean"))
+        .reset_index()
+        .query("country != 'Unknown'")
+        .sort_values("deep_focus_events", ascending=False)
+        .head(20)
+    )
+    st.dataframe(deep, use_container_width=True, hide_index=True)
 
 elif page == "Data Quality":
     st.markdown("## 🧪 Data Quality Center")

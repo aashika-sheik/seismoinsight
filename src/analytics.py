@@ -64,6 +64,60 @@ def regional_summary(df):
     )
 
 
+def top_average_magnitude_countries(df, n=5, min_events=10):
+    """Avoid ranking countries represented by only a handful of events."""
+    return (
+        df[df["country"] != "Unknown"]
+        .groupby("country")
+        .agg(events=("id", "count"), avg_magnitude=("mag", "mean"))
+        .query("events >= @min_events")
+        .sort_values(["avg_magnitude", "events"], ascending=[False, False])
+        .head(n).reset_index()
+    )
+
+
+def same_month_shallow_deep(df):
+    x = df[df["country"] != "Unknown"].copy()
+    g = x.groupby(["country", "year", "month"]).agg(
+        shallow_events=("shallow_flag", "sum"),
+        deep_events=("deep_focus_flag", "sum")
+    ).reset_index()
+    return g[(g["shallow_events"] > 0) & (g["deep_events"] > 0)].sort_values(
+        ["country", "year", "month"]
+    )
+
+
+def equator_depth(df):
+    x = df[df["latitude"].between(-5, 5, inclusive="both") & (df["country"] != "Unknown")].copy()
+    return x.groupby("country").agg(
+        events=("id", "count"),
+        avg_depth_km=("depth_km", "mean"),
+        avg_magnitude=("mag", "mean")
+    ).reset_index().sort_values("events", ascending=False)
+
+
+def shallow_deep_ratio(df):
+    x = df[df["country"] != "Unknown"].groupby("country").agg(
+        shallow_events=("shallow_flag", "sum"),
+        deep_events=("deep_focus_flag", "sum"),
+        events=("id", "count")
+    ).reset_index()
+    x["shallow_deep_ratio"] = np.where(
+        x["deep_events"] > 0, x["shallow_events"] / x["deep_events"], np.inf
+    )
+    return x.sort_values(["shallow_deep_ratio", "events"], ascending=[False, False])
+
+
+def tsunami_magnitude_difference(df):
+    tsunami_avg = df.loc[df["tsunami"] == 1, "mag"].mean()
+    non_tsunami_avg = df.loc[df["tsunami"] == 0, "mag"].mean()
+    return pd.DataFrame([{
+        "tsunami_avg_magnitude": tsunami_avg,
+        "non_tsunami_avg_magnitude": non_tsunami_avg,
+        "average_difference": tsunami_avg - non_tsunami_avg
+    }])
+
+
 def yoy_growth(df):
     y = yearly_counts(df).copy()
     y["yoy_growth_pct"] = y["events"].pct_change() * 100
@@ -83,15 +137,30 @@ def quality_extremes(df, n=10):
     return df.sort_values("quality_score", ascending=True)[cols].head(n)
 
 
+def high_station_coverage(df, threshold=20):
+    cols = ["id", "time", "place", "mag", "nst", "gap", "rms", "quality_score"]
+    return df[df["nst"] > threshold].sort_values("nst", ascending=False)[cols]
+
+
+def active_regions(df, n=3, min_events=10):
+    r = regional_summary(df)
+    r = r[r["events"] >= min_events].copy()
+    if r.empty:
+        return r
+    # Transparent composite: percentile frequency (65%) + average magnitude percentile (35%).
+    r["frequency_score"] = r["events"].rank(pct=True)
+    r["magnitude_score"] = r["avg_magnitude"].rank(pct=True)
+    r["activity_index"] = 0.65 * r["frequency_score"] + 0.35 * r["magnitude_score"]
+    return r.sort_values("activity_index", ascending=False).head(n)
+
+
 def activity_zones(df):
     region = regional_summary(df)
     if region.empty:
         return region
-
     region["frequency_score"] = region["events"].rank(pct=True)
     region["magnitude_score"] = region["avg_magnitude"].rank(pct=True)
     region["activity_index"] = 0.65 * region["frequency_score"] + 0.35 * region["magnitude_score"]
-
     region["activity_zone"] = pd.cut(
         region["activity_index"],
         bins=[-np.inf, 0.33, 0.66, np.inf],
@@ -103,25 +172,20 @@ def activity_zones(df):
 def seismic_story(df):
     if df.empty:
         return ["No earthquake records match the current filters."]
-
     facts = []
     years = yearly_counts(df)
     countries = top_countries(df, 1)
     strongest_event = df.loc[df["mag"].idxmax()]
     tsunami_pct = df["tsunami"].mean() * 100
     deep_pct = df["deep_focus_flag"].mean() * 100
-
     if len(years) >= 2:
-        first = years.iloc[0]["events"]
-        last = years.iloc[-1]["events"]
+        first, last = years.iloc[0]["events"], years.iloc[-1]["events"]
         if first:
             growth = (last - first) / first * 100
             direction = "increased" if growth >= 0 else "decreased"
             facts.append(f"Observed event count {direction} by {abs(growth):.1f}% between {int(years.iloc[0]['year'])} and {int(years.iloc[-1]['year'])}.")
-
     if not countries.empty:
         facts.append(f"{countries.iloc[0]['country']} has the highest observed event count in the current selection, with {int(countries.iloc[0]['events']):,} events.")
-
     facts.append(f"The strongest observed event has magnitude {strongest_event['mag']:.1f} near {strongest_event['place']}.")
     facts.append(f"{tsunami_pct:.2f}% of selected events have the USGS tsunami indicator set to 1.")
     facts.append(f"{deep_pct:.2f}% of selected events are deeper than 300 km.")
